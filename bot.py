@@ -4,10 +4,10 @@ from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackContext, JobQueue
 
 # Токен для доступа к Telegram API (получаешь у BotFather)
-TOKEN = 'YOUR_TELEGRAM_BOT_API_TOKEN'
+TOKEN = 7554998768:AAEnapYG5M_Jtuf4lAQk-DG4lDjePKRf1-g
 
 # Токен OpenAI API (получаешь на https://platform.openai.com/account/api-keys)
-OPENAI_API_KEY = 'YOUR_OPENAI_API_KEY'
+OPENAI_API_KEY = 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
 
 # Логирование ошибок
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -41,20 +41,24 @@ def send_news(update: Update, context: CallbackContext):
     update.message.reply_text(news)
 
 # Функция для обновления новостей дважды в день
-def schedule_news(update: Update, context: CallbackContext):
+def schedule_news(context: CallbackContext):
     job_queue = context.job_queue
-    job_queue.run_daily(send_news, time='09:00', context=update.message.chat_id)
-    job_queue.run_daily(send_news, time='18:00', context=update.message.chat_id)
+    job_queue.run_daily(send_news, time='09:00', context=context.job.context)
+    job_queue.run_daily(send_news, time='18:00', context=context.job.context)
 
 # Основная функция для запуска бота
 def main():
     # Создание объекта Updater
     updater = Updater(TOKEN, use_context=True)
     dispatcher = updater.dispatcher
+    job_queue = updater.job_queue
 
     # Команды бота
     dispatcher.add_handler(CommandHandler("start", start))
     dispatcher.add_handler(CommandHandler("news", send_news))
+
+    # Планирование новостей дважды в день
+    job_queue.run_daily(schedule_news, time='09:00')
 
     # Запуск бота
     updater.start_polling()
@@ -62,4 +66,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
