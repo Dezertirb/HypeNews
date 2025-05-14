@@ -1,0 +1,188 @@
+project_root/
+├── bot.py
+├── scheduler.py
+├── news_fetcher.py
+├── database.py
+├── pdf_generator.py
+├── summarizer.py
+├── config.py
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+├── README.md
+└── .env
+
+# bot.py
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from database import session, User
+from news_fetcher import fetch_news
+from config import TELEGRAM_TOKEN
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Привет! Укажи свои интересы через запятую (например: tech, world, science)."
+    )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    interests = update.message.text.lower().split(",")
+    telegram_id = update.message.from_user.id
+    user = session.query(User).filter_by(telegram_id=telegram_id).first()
+    if not user:
+        user = User(telegram_id=telegram_id, interests=",".join(interests))
+        session.add(user)
+    else:
+        user.interests = ",".join(interests)
+    session.commit()
+    await update.message.reply_text("Спасибо! Вы будете получать подборку 2 раза в день.")
+
+async def donate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    button = InlineKeyboardButton("Поддержать 💸", url="https://boosty.to/yourpage")
+    markup = InlineKeyboardMarkup([[button]])
+    await update.message.reply_text("Поддержи проект, если он тебе нравится:", reply_markup=markup)
+
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("donate", donate))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+if __name__ == "__main__":
+    app.run_polling()
+
+# scheduler.py
+from apscheduler.schedulers.blocking import BlockingScheduler
+from telegram import Bot
+from database import session, User
+from news_fetcher import fetch_news
+from summarizer import summarize_news
+from pdf_generator import create_pdf
+from config import TELEGRAM_TOKEN
+
+bot = Bot(token=TELEGRAM_TOKEN)
+scheduler = BlockingScheduler()
+
+@scheduler.scheduled_job('cron', hour='8,20')
+def send_news_digest():
+    users = session.query(User).all()
+    for user in users:
+        interests = user.interests.split(",")
+        news_items = fetch_news(interests)
+        summary = summarize_news(news_items)
+        pdf_path = create_pdf(summary)
+        try:
+            bot.send_document(chat_id=user.telegram_id, document=open(pdf_path, 'rb'))
+        except Exception as e:
+            print(f"Ошибка при отправке пользователю {user.telegram_id}: {e}")
+
+if __name__ == "__main__":
+    scheduler.start()
+
+# news_fetcher.py
+import feedparser
+
+RSS_FEEDS = {
+    "tech": "https://www.theverge.com/rss/index.xml",
+    "science": "https://www.sciencemag.org/rss/news_current.xml",
+    "world": "http://feeds.bbci.co.uk/news/world/rss.xml",
+}
+
+def fetch_news(topics, max_items=10):
+    results = []
+    for topic in topics:
+        feed_url = RSS_FEEDS.get(topic.strip())
+        if feed_url:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:max_items]:
+                results.append(f"{entry.title}\n{entry.link}")
+    return results
+
+# summarizer.py
+from openai import OpenAI
+import os
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def summarize_news(news_list):
+    text = "\n".join(news_list)
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": f"Сделай краткое саммари следующих новостей:\n{text}"}]
+    )
+    return response.choices[0].message.content
+
+# pdf_generator.py
+from fpdf import FPDF
+import uuid
+
+def create_pdf(text):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_font("Arial", size=12)
+    for line in text.split("\n"):
+        pdf.multi_cell(0, 10, line)
+    filename = f"news_{uuid.uuid4().hex[:6]}.pdf"
+    pdf.output(filename)
+    return filename
+
+# database.py
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import datetime
+
+engine = create_engine('sqlite:///users.db')
+Base = declarative_base()
+Session = sessionmaker(bind=engine)
+session = Session()
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    telegram_id = Column(Integer, unique=True)
+    interests = Column(Text)
+    is_premium = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+Base.metadata.create_all(engine)
+
+# config.py
+import os
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+# requirements.txt
+python-telegram-bot==20.3
+feedparser
+SQLAlchemy
+apscheduler
+fpdf
+openai
+
+# Dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN pip install --no-cache-dir -r requirements.txt
+CMD ["python", "bot.py"]
+
+# docker-compose.yml
+version: '3.9'
+services:
+  bot:
+    build: .
+    restart: always
+    env_file:
+      - .env
+  scheduler:
+    build: .
+    command: python scheduler.py
+    restart: always
+    env_file:
+      - .env
+
+# .env
+TELEGRAM_TOKEN=your_token_here
+OPENAI_API_KEY=your_openai_key_here
+
+# README.md
+# Telegram News Bot
