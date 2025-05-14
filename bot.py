@@ -1,4 +1,3 @@
-print("Бот запущен!")
 import logging
 import openai
 from telegram import Update
