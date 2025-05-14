@@ -2,12 +2,15 @@ import logging
 import openai
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackContext, JobQueue
+from dotenv import load_dotenv
+import os
 
-# Токен для доступа к Telegram API (получаешь у BotFather)
-TOKEN = 7554998768:AAEnapYG5M_Jtuf4lAQk-DG4lDjePKRf1-g
+# Загружаем переменные окружения из .env файла
+load_dotenv()
 
-# Токен OpenAI API (получаешь на https://platform.openai.com/account/api-keys)
-OPENAI_API_KEY = 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
+# Токены для доступа к Telegram API и OpenAI API
+TOKEN = os.getenv('TELEGRAM_TOKEN')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 # Логирование ошибок
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -21,7 +24,7 @@ openai.api_key = OPENAI_API_KEY
 def get_news():
     try:
         response = openai.Completion.create(
-            model="text-davinci-003",  # Или другой доступный GPT-3/4 модель
+            model="text-davinci-003",
             prompt="Provide me with the latest news in the technology sector",
             temperature=0.5,
             max_tokens=500
