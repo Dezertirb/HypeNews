@@ -72,7 +72,7 @@ async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with httpx.AsyncClient() as client:
             response = await client.post(DEEPSEEK_API_URL, headers=headers, json=data, timeout=30)
             response.raise_for_status()
-            result = response.json()
+            result = await response.json()
             news = result["choices"][0]["message"]["content"]
             await update.message.reply_text(news)
     except Exception as e:
