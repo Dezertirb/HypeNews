@@ -2,96 +2,88 @@ import logging
 import os
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    CallbackQueryHandler,
-    MessageHandler,
-    filters,
-)
-from openai import OpenAI
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+import httpx
 
-# Настройка
 load_dotenv()
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-# Инициализация OpenAI
-client = OpenAI(api_key=OPENAI_KEY)
+# Настройки
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
-# Категории
-CATEGORIES = ["🎮 Игры", "🏀 Спорт", "🎬 Кино", "📺 Сериалы"]
-user_preferences = {}
+user_categories = {}
 
-# Логгирование
+# Варианты интересов
+ALL_CATEGORIES = ["Игры", "Спорт", "Кино", "Сериалы"]
+
+# Логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Генерация новости
-def generate_news(categories):
-    prompt = f"Составь краткую новость на русском языке по следующим категориям: {', '.join(categories)}."
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content.strip()
-
-# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_preferences[update.effective_user.id] = []
-    await update.message.reply_text("Привет! Выбери интересующие категории:", reply_markup=category_menu())
-
-# Меню категорий
-def category_menu():
-    buttons = [
-        [InlineKeyboardButton(cat, callback_data=f"toggle_{cat}")]
-        for cat in CATEGORIES
-    ]
-    buttons.append([InlineKeyboardButton("✅ Готово", callback_data="done")])
-    return InlineKeyboardMarkup(buttons)
-
-# Обработка выбора категорий
-async def category_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    data = query.data
-
-    if data == "done":
-        selected = user_preferences.get(user_id, [])
-        if not selected:
-            await query.edit_message_text("Вы не выбрали категории. Попробуйте ещё раз.")
-            return
-        news = generate_news(selected)
-        await query.edit_message_text(f"Ваши категории: {', '.join(selected)}\n\n🗞 {news}")
-    else:
-        category = data.replace("toggle_", "")
-        prefs = user_preferences.setdefault(user_id, [])
-        if category in prefs:
-            prefs.remove(category)
-        else:
-            prefs.append(category)
-        await query.edit_message_reply_markup(reply_markup=category_menu())
-
-# Команда /news
-async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    prefs = user_preferences.get(user_id)
-    if not prefs:
-        await update.message.reply_text("Сначала выберите категории командой /start.")
+    user_categories[user_id] = []
+    await update.message.reply_text("Привет! Выбери категории новостей:", reply_markup=category_keyboard(user_id))
+
+def category_keyboard(user_id):
+    keyboard = [
+        [InlineKeyboardButton(f"{'✅' if c in user_categories.get(user_id, []) else '☐'} {c}", callback_data=c)]
+        for c in ALL_CATEGORIES
+    ]
+    keyboard.append([InlineKeyboardButton("Готово", callback_data="done")])
+    return InlineKeyboardMarkup(keyboard)
+
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    category = query.data
+    if category == "done":
+        await query.edit_message_text("Категории сохранены. Используйте /news для получения новостей.")
         return
-    news = generate_news(prefs)
-    await update.message.reply_text(f"🗞 {news}")
 
-# Основной запуск
+    user_cats = user_categories.setdefault(user_id, [])
+    if category in user_cats:
+        user_cats.remove(category)
+    else:
+        user_cats.append(category)
+
+    await query.edit_message_reply_markup(reply_markup=category_keyboard(user_id))
+
+async def get_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    categories = user_categories.get(user_id, [])
+    if not categories:
+        await update.message.reply_text("Вы не выбрали категории. Введите /start.")
+        return
+
+    prompt = f"Подбери свежие и интересные новости в категориях: {', '.join(categories)}. Представь их как для глянцевого журнала."
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        async with httpx.AsyncClient() as client:
+            response = await client.post(DEEPSEEK_API_URL, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            news = result["choices"][0]["message"]["content"]
+            await update.message.reply_text(news)
+    except Exception as e:
+        logger.error(f"Ошибка при получении новостей: {e}")
+        await update.message.reply_text("Произошла ошибка при получении новостей.")
+
 def main():
-    app = Application.builder().token(TOKEN).build()
-
+    app = ApplicationBuilder().token(os.getenv("TELEGRAM_TOKEN")).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("news", news))
-    app.add_handler(CallbackQueryHandler(category_handler))
-
-    logger.info("Бот запущен. Нажмите Ctrl+C для остановки.")
+    app.add_handler(CommandHandler("news", get_news))
+    app.add_handler(CallbackQueryHandler(button))
     app.run_polling()
 
 if __name__ == "__main__":
