@@ -1,80 +1,60 @@
 import logging
-import openai
 import os
 from dotenv import load_dotenv
+from openai import OpenAI
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    PicklePersistence,
-)
-from datetime import time
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# Загрузка переменных окружения
+# Загружаем переменные окружения из .env файла
 load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Настройка логирования
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-# Установка ключа OpenAI
-openai.api_key = OPENAI_API_KEY
+# Инициализируем OpenAI клиента
+openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Получение новостей от OpenAI
-async def get_news():
-    try:
-        response = openai.Completion.create(
-            model="text-davinci-003",
-            prompt="Give me the latest tech news",
-            temperature=0.5,
-            max_tokens=500
-        )
-        return response.choices[0].text.strip()
-    except Exception as e:
-        return f"Ошибка при получении новостей: {str(e)}"
-
-# /start
+# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_chat.id
-    if user_id not in context.bot_data.get("subscribers", []):
-        context.bot_data.setdefault("subscribers", []).append(user_id)
-        await update.message.reply_text("Вы подписаны на рассылку новостей!")
-    else:
-        await update.message.reply_text("Вы уже подписаны.")
-    await update.message.reply_text("Напиши /news, чтобы получить свежие новости.")
+    await update.message.reply_text("Привет! Я бот, который генерирует текст с помощью OpenAI. Напиши /news чтобы получить новость.")
 
-# /news
-async def send_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    news = await get_news()
-    await update.message.reply_text(news)
+# Команда /news
+async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Генерирую новость...")
 
-# Рассылка по расписанию
-async def scheduled_news(context: ContextTypes.DEFAULT_TYPE):
-    subscribers = context.bot_data.get("subscribers", [])
-    news = await get_news()
-    for user_id in subscribers:
-        try:
-            await context.bot.send_message(chat_id=user_id, text=news)
-        except Exception as e:
-            logging.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Ты пишешь короткие интересные новости в стиле глянцевого журнала."},
+                {"role": "user", "content": "Напиши короткую новость на любую тему, актуальную на сегодня."}
+            ],
+            max_tokens=300,
+            temperature=0.9
+        )
 
-# Основной запуск
-def main():
-    persistence = PicklePersistence(filepath="bot_data.pkl")
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).persistence(persistence).build()
+        news_text = response.choices[0].message.content
+        await update.message.reply_text(news_text)
 
-    # Обработчики команд
+    except Exception as e:
+        logging.error(f"Ошибка при запросе к OpenAI: {e}")
+        await update.message.reply_text("Произошла ошибка при генерации текста.")
+
+# Главная функция
+if __name__ == '__main__':
+    TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+    if not TOKEN:
+        print("Ошибка: TELEGRAM_TOKEN не найден в .env файле.")
+        exit(1)
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("news", send_news))
+    app.add_handler(CommandHandler("news", news))
 
-    # Ежедневные рассылки
-    app.job_queue.run_daily(scheduled_news, time=time(9, 0))
-    app.job_queue.run_daily(scheduled_news, time=time(18, 0))
-
-    # Запуск
+    print("Бот запущен...")
     app.run_polling()
-
-if __name__ == "__main__":
-    main()
