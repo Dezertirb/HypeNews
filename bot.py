@@ -1,49 +1,41 @@
 import os
-import logging
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-import openai
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
+from datetime import time
 
-# Загрузка .env
 load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-
-# Настройка OpenAI
-openai.api_key = OPENAI_API_KEY
-
-# Команда /start
+# Приветствие
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Напиши мне что-нибудь, и я отвечу через ChatGPT.")
+    await update.message.reply_text("Привет! Я буду присылать тебе новости дважды в день.")
 
-# Обработка сообщений
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": user_message}
-            ]
-        )
-        reply = response.choices[0].message.content.strip()
-        await update.message.reply_text(reply)
-    except Exception as e:
-        logging.error(e)
-        await update.message.reply_text("Ошибка при обращении к OpenAI.")
+# Рассылка по расписанию
+async def scheduled_news(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    chat_id = job.chat_id
+    await context.bot.send_message(chat_id=chat_id, text="📰 Вот твоя утренняя подборка новостей!")
 
-# Запуск
-async def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+def main():
+    app = Application.builder().token(TOKEN).job_queue_enabled(True).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("✅ Бот запущен.")
-    await app.run_polling()
+
+    # Пример: добавим рассылку каждый день в 9:00
+    app.job_queue.run_daily(
+        scheduled_news,
+        time=time(hour=9, minute=0),
+        chat_id=123456789  # Замените на ваш Telegram ID
+    )
+
+    print("Бот запущен...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
